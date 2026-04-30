@@ -1,1 +1,1 @@
-pyinstaller -F -w -i icon.ico your_script.py
+pyinstaller -F -w -i icon.ico --hidden-import=pystray --hidden-import=PIL --add-data="icon.ico;." time_sync_tool.py

@@ -5,5 +5,5 @@
         "time.windows.com"
     ],
     "auto_sync_interval": 1800,
-    "startup": false
+    "startup": true
 }

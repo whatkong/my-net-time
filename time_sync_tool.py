@@ -3,11 +3,13 @@ import sys
 import time
 import json
 import threading
+from turtle import onclick
 import winreg
 import ctypes
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from datetime import datetime
+import pystray
 
 
 # 检查管理员权限（兼容Windows XP到Win11）
@@ -118,8 +120,8 @@ DEFAULT_CONFIG = {
         # "51.144.254.253",
         # "32.61.227.69"
     ],
-    "auto_sync_interval": 3600,  # 默认1小时
-    "startup": False
+    "auto_sync_interval": 3600,  # 默认60分钟
+    "startup": True
 }
 
 # 加载配置
@@ -127,7 +129,21 @@ def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
-                return json.load(f)
+                config = json.load(f)
+                # 确保startup字段默认为True
+                if "startup" not in config:
+                    config["startup"] = True
+                # 如果startup是False，强制改为True
+                if not config.get("startup", True):
+                    config["startup"] = True
+                # 确保auto_sync_interval默认为3600秒（60分钟）
+                if "auto_sync_interval" not in config:
+                    config["auto_sync_interval"] = 3600
+                if config.get("auto_sync_interval", 0) < 60:
+                    config["auto_sync_interval"] = 3600
+                # 无论是否有变更，都保存一次配置
+                save_config(config)
+                return config
         except:
             return DEFAULT_CONFIG.copy()
     return DEFAULT_CONFIG.copy()
@@ -376,8 +392,63 @@ class TimeSyncTool:
         
         # 自动同步定时器
         self.auto_sync_timer = None
+        
+        # 创建系统托盘图标
+        self.create_tray_icon()
+        
+        # 拦截窗口关闭事件
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
         self.setup_ui()
+        
+        # 确保开机自启生效（根据配置设置注册表）
+        set_startup(self.config["startup"])
+        
         self.start_auto_sync()
+    
+    def create_tray_icon(self):
+        """创建系统托盘图标"""
+        # 创建一个简单的图标
+        from PIL import Image, ImageDraw
+        
+        # 创建一个64x64的图标
+        image = Image.new('RGB', (64, 64), color=(0, 120, 215))
+        draw = ImageDraw.Draw(image)
+        
+        # 绘制一个时钟图标
+        draw.ellipse([8, 8, 56, 56], fill=(255, 255, 255), outline=(255, 255, 255), width=2)
+        draw.line([32, 32, 32, 16], fill=(0, 120, 215), width=3)
+        draw.line([32, 32, 44, 32], fill=(0, 120, 215), width=3)
+        
+        # 创建托盘菜单，设置"显示窗口"为默认项
+        show_item = pystray.MenuItem("显示窗口", self.show_window, default=True)
+        quit_item = pystray.MenuItem("退出程序", self.quit_app)
+        menu = pystray.Menu(show_item, quit_item)
+
+        # 创建托盘图标
+        self.icon = pystray.Icon("TimeSyncTool", image, "系统时间同步工具", menu)
+
+        # 在单独的线程中运行托盘图标
+        threading.Thread(target=self.icon.run, daemon=True).start()
+
+    def show_window(self, icon=None, item=None):
+        """显示主窗口"""
+        print("显示窗口被调用")
+        self.root.deiconify()
+        self.root.lift()
+        self.root.state('normal')
+        print("窗口状态:", self.root.state())
+    
+    def quit_app(self, icon=None, item=None):
+        """退出程序"""
+        self.icon.stop()
+        self.root.quit()
+        self.root.destroy()
+    
+    def on_closing(self):
+        """窗口关闭事件处理"""
+        # 隐藏窗口而不是退出
+        self.root.withdraw()
     
     def setup_ui(self):
         # 调整窗口大小，确保有足够空间显示所有内容
@@ -408,14 +479,13 @@ class TimeSyncTool:
         self.sync_btn = ttk.Button(sync_frame, text="一键同步", command=self.on_sync)
         self.sync_btn.pack(side=tk.LEFT)
         
-        # 加载动画标签 - 显示在按钮旁边
-        self.loading_var = tk.StringVar(value="")
-        self.loading_label = ttk.Label(sync_frame, textvariable=self.loading_var, font=("Arial", 12))
-        self.loading_label.pack(side=tk.LEFT, padx=5)
-        
         # 设置按钮
         settings_btn = ttk.Button(button_frame, text="自定义同步", command=self.open_settings)
         settings_btn.pack(side=tk.LEFT, padx=5)
+        
+        # 作者按钮
+        author_btn = ttk.Button(button_frame, text="关于", command=self.show_about)
+        author_btn.pack(side=tk.LEFT, padx=5)
         
         # 开机自启复选框
         self.startup_var = tk.BooleanVar(value=self.config["startup"])
@@ -518,37 +588,20 @@ class TimeSyncTool:
         
         # 使用最佳服务器设置系统时间
         final_result = sync_time(best_server['server'], set_system_time=True)
-        if final_result['success']:
-            if show_message:
-                messagebox.showinfo("成功", f"时间同步成功！\n使用服务器: {best_server['server']}\n延迟: {best_server['delay']}ms\n偏移量: {best_server['offset']}ms")
-        else:
+        if not final_result['success']:
+            # if show_message:
+                #messagebox.showinfo("成功", f"时间同步成功！\n使用服务器: {best_server['server']}\n延迟: {best_server['delay']}ms\n偏移量: {best_server['offset']}ms")
+     
             if show_message:
                 messagebox.showerror("错误", f"同步失败: {final_result['error']}")
     
     def _start_loading(self):
-        """启动loading动画"""
+        """启动loading效果"""
         # 按钮防呆：禁用同步按钮
         self.sync_btn.config(state=tk.DISABLED)
         
-        # 启动loading动画
-        def update_loading():
-            current = self.loading_var.get()
-            if self.syncing:
-                # 简单的loading动画：... -> . -> .. -> ...
-                if current == "":
-                    self.loading_var.set(".")
-                elif current == ".":
-                    self.loading_var.set("..")
-                elif current == "..":
-                    self.loading_var.set("...")
-                else:
-                    self.loading_var.set(".")
-                # 继续更新loading动画
-                self.root.after(300, update_loading)
-        
         # 设置同步状态
         self.syncing = True
-        update_loading()
     
     def _stop_loading(self):
         """停止loading动画"""
@@ -598,6 +651,50 @@ class TimeSyncTool:
         else:
             self.config["startup"] = enable
             save_config(self.config)
+    
+    def show_about(self):
+        """显示关于弹窗，位置在主窗口正中"""
+        # 创建自定义弹窗
+        about_window = tk.Toplevel(self.root)
+        about_window.title("关于")
+        about_window.geometry("300x120")
+        about_window.resizable(False, False)
+        
+        # 先隐藏窗口，等所有配置完成后再显示
+        about_window.withdraw()
+        
+        # 计算主窗口中心位置
+        self.root.update_idletasks()
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_w = self.root.winfo_width()
+        main_h = self.root.winfo_height()
+        
+        # 设置弹窗在主窗口正中
+        popup_w = 300
+        popup_h = 120
+        pos_x = main_x + (main_w - popup_w) // 2
+        pos_y = main_y + (main_h - popup_h) // 2
+        about_window.geometry(f"{popup_w}x{popup_h}+{pos_x}+{pos_y}")
+        
+        # 设置为模态窗口
+        about_window.transient(self.root)
+        about_window.grab_set()
+        
+        # 添加内容
+        content_frame = ttk.Frame(about_window, padding="20")
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(content_frame, text="系统时间同步工具").pack(pady=5)
+        ttk.Label(content_frame, text="作者：李灿").pack(pady=5)
+        ttk.Button(content_frame, text="确定", command=about_window.destroy).pack(pady=10)
+        
+        # 配置完成后再显示窗口
+        about_window.update_idletasks()
+        about_window.deiconify()
+        
+        # 等待窗口关闭
+        about_window.wait_window()
     
     def start_auto_sync(self):
         # 清除之前的定时器
